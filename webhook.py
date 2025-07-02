@@ -6,9 +6,6 @@ from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
-# Instantly webhook auth
-INSTANTLY_KEY = os.getenv("INSTANTLY_API_KEY")
-
 # Monday.com settings
 M_TOKEN       = os.getenv("MONDAY_API_TOKEN")
 BOARD_ID      = int(os.getenv("MONDAY_BOARD_ID", "0"))
@@ -20,14 +17,8 @@ headers = {
     "Content-Type":  "application/json",
 }
 
-def verify_inst_key(req):
-    return req.headers.get("Authorization") == f"Bearer {INSTANTLY_KEY}"
-
 @app.route("/webhook", methods=["POST"])
 def instantly_webhook():
-    if not verify_inst_key(request):
-        return "Unauthorized", 401
-
     payload = request.get_json()
     if payload.get("event_type") != "email.sent":
         return jsonify(status="ignored"), 200
