@@ -2,6 +2,7 @@
 
 import os
 import requests
+import json
 from flask import Flask, request, jsonify
 
 app = Flask(__name__)
@@ -79,8 +80,45 @@ def instantly_webhook():
         None
     )
     if not match:
-        print(f"❌ No item found with email: {lead_email}")
-        return jsonify(status="no-item"), 200
+        print(f"❌ No item found with email: {lead_email}, creating new item.")
+        # Prepare column values for the new item
+        column_values = {
+            EMAIL_COL: {"email": lead_email, "text": lead_email},
+            LAST_COL: date_str
+        }
+        create_item_mutation = """
+        mutation ($boardId: Int!, $itemName: String!, $columnVals: JSON!) {
+          create_item (
+            board_id: $boardId,
+            item_name: $itemName,
+            column_values: $columnVals
+          ) {
+            id
+          }
+        }
+        """
+        create_vars = {
+            "boardId": int(BOARD_ID),
+            "itemName": lead_email,
+            "columnVals": json.dumps(column_values)
+        }
+        create_resp = requests.post(
+            "https://api.monday.com/v2",
+            json={"query": create_item_mutation, "variables": create_vars},
+            headers=HEADERS
+        )
+        if not create_resp.ok:
+            print("❌ Monday create_item failed:", create_resp.status_code, create_resp.text)
+            print("🔍 Create item variables:", create_vars)
+            create_resp.raise_for_status()
+        create_data = create_resp.json()
+        print("✅ Monday create_item response:", create_data)
+        if "errors" in create_data:
+            print("❌ GraphQL create_item errors:", create_data["errors"])
+            return jsonify(status="create-error", errors=create_data["errors"]), 500
+        new_item_id = create_data["data"]["create_item"]["id"]
+        print(f"✅ Created new item: {new_item_id}")
+        return jsonify(status="created", item=new_item_id, email=lead_email, date=date_str), 201
 
     print(f"✅ Found matching item: {match['id']}")
 
