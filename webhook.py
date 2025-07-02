@@ -87,7 +87,7 @@ def instantly_webhook():
             LAST_COL: date_str
         }
         create_item_mutation = """
-        mutation ($boardId: Int!, $itemName: String!, $columnVals: JSON!) {
+        mutation ($boardId: ID!, $itemName: String!, $columnVals: JSON!) {
           create_item (
             board_id: $boardId,
             item_name: $itemName,
@@ -98,7 +98,7 @@ def instantly_webhook():
         }
         """
         create_vars = {
-            "boardId": int(BOARD_ID),
+            "boardId": str(BOARD_ID),
             "itemName": lead_email,
             "columnVals": json.dumps(column_values)
         }
