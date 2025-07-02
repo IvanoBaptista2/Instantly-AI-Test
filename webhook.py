@@ -7,47 +7,48 @@ from flask import Flask, request, jsonify
 app = Flask(__name__)
 
 # ─── CONFIG FROM ENV ────────────────────────────────────────────────────────────
-M_TOKEN    = os.getenv("MONDAY_API_TOKEN")       # your Monday.com API token
-BOARD_ID   = os.getenv("MONDAY_BOARD_ID")        # e.g. "2032211365"
-EMAIL_COL  = os.getenv("MONDAY_EMAIL_COL")       # e.g. "name"
-LAST_COL   = os.getenv("MONDAY_LAST_CONTACT")    # e.g. "date_mksfxnwb"
+M_TOKEN      = os.getenv("MONDAY_API_TOKEN")
+BOARD_ID     = os.getenv("MONDAY_BOARD_ID")         # e.g. "2032211365"
+EMAIL_COL    = os.getenv("MONDAY_EMAIL_COL")        # e.g. "name"
+LAST_COL     = os.getenv("MONDAY_LAST_CONTACT")     # e.g. "date_mksfxnwb"
 
-headers = {
+HEADERS = {
     "Authorization": M_TOKEN,
     "Content-Type":  "application/json",
 }
 
-# ─── WEBHOOK ENDPOINT ───────────────────────────────────────────────────────────
+# ─── WEBHOOK ───────────────────────────────────────────────────────────────────
 @app.route("/webhook", methods=["POST"])
 def instantly_webhook():
-    data = request.get_json(force=True)
+    payload = request.get_json(force=True)
 
-    # only care about sent‐email events
-    if data.get("event_type") != "email.sent":
+    if payload.get("event_type") != "email.sent":
         return jsonify(status="ignored"), 200
 
-    lead_email = data["lead_email"]
-    date_str   = data["timestamp"].split("T")[0]
+    lead_email = payload["lead_email"]
+    date_str   = payload["timestamp"].split("T")[0]
 
     # ─── 1) FETCH ALL ITEMS + THEIR EMAIL COLUMN ────────────────────────────────
-    query_items = """
+    query = """
     query($boardIds: [ID!]!, $colIds: [String!]!) {
       boards(ids: $boardIds) {
         items {
           id
-          column_values(ids: $colIds) { text }
+          column_values(ids: $colIds) {
+            text
+          }
         }
       }
     }
     """
-    vars_items = {
+    vars_ = {
       "boardIds": [BOARD_ID],
       "colIds":   [EMAIL_COL]
     }
     resp = requests.post(
       "https://api.monday.com/v2",
-      json={"query": query_items, "variables": vars_items},
-      headers=headers
+      json={"query": query, "variables": vars_},
+      headers=HEADERS
     )
     if not resp.ok:
         print("❌ Monday items lookup failed:", resp.status_code, resp.text)
@@ -64,14 +65,16 @@ def instantly_webhook():
     mutation = """
     mutation($boardId: ID!, $itemId: Int!, $colId: String!, $value: JSON!) {
       change_simple_column_value(
-        board_id: $boardId,
-        item_id:  $itemId,
+        board_id:  $boardId,
+        item_id:   $itemId,
         column_id: $colId,
         value:     $value
-      ) { id }
+      ) {
+        id
+      }
     }
     """
-    vars_mut = {
+    vars2 = {
       "boardId": BOARD_ID,
       "itemId":  int(match["id"]),
       "colId":   LAST_COL,
@@ -79,8 +82,8 @@ def instantly_webhook():
     }
     upd = requests.post(
       "https://api.monday.com/v2",
-      json={"query": mutation, "variables": vars_mut},
-      headers=headers
+      json={"query": mutation, "variables": vars2},
+      headers=HEADERS
     )
     if not upd.ok:
         print("❌ Monday update failed:", upd.status_code, upd.text)
@@ -88,7 +91,7 @@ def instantly_webhook():
 
     return jsonify(status="updated", item=match["id"], date=date_str), 200
 
-# ─── BOILERPLATE ───────────────────────────────────────────────────────────────
+# ─── RUN ───────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "5001"))
     print(f"🚀 Listening on http://0.0.0.0:{port}/webhook")
