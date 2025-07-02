@@ -68,9 +68,16 @@ def instantly_webhook():
     items = response_data["data"]["boards"][0]["items_page"]["items"]
     print(f"📋 Found {len(items)} items in board")
     
-    match = next((it for it in items
-                  if it["column_values"][0]["text"] == lead_email),
-                 None)
+    for it in items:
+        print(f"Item ID: {it['id']}, column_values: {it['column_values']}")
+
+    match = next(
+        (
+            it for it in items
+            if it["column_values"] and it["column_values"][0]["text"] == lead_email
+        ),
+        None
+    )
     if not match:
         print(f"❌ No item found with email: {lead_email}")
         return jsonify(status="no-item"), 200
