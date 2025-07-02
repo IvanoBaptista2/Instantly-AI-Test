@@ -30,20 +30,23 @@ def instantly_webhook():
 
     # ─── 1) FETCH ALL ITEMS + THEIR EMAIL COLUMN ────────────────────────────────
     query = """
-    query($boardIds: [ID!]!, $colIds: [String!]!) {
-      boards(ids: $boardIds) {
-        items {
-          id
-          column_values(ids: $colIds) {
-            text
+    query($boardId: ID!, $columnId: String!) {
+      boards(ids: [$boardId]) {
+        items_page {
+          items {
+            id
+            column_values(ids: [$columnId]) {
+              id
+              text
+            }
           }
         }
       }
     }
     """
     vars_ = {
-      "boardIds": [BOARD_ID],
-      "colIds":   [EMAIL_COL]
+      "boardId": BOARD_ID,
+      "columnId": EMAIL_COL
     }
     resp = requests.post(
       "https://api.monday.com/v2",
@@ -52,16 +55,29 @@ def instantly_webhook():
     )
     if not resp.ok:
         print("❌ Monday items lookup failed:", resp.status_code, resp.text)
+        print("🔍 Query variables:", vars_)
         resp.raise_for_status()
 
-    items = resp.json()["data"]["boards"][0]["items"]
+    response_data = resp.json()
+    print("✅ Monday API response:", response_data)
+    
+    if "errors" in response_data:
+        print("❌ GraphQL errors:", response_data["errors"])
+        return jsonify(status="graphql-error", errors=response_data["errors"]), 500
+
+    items = response_data["data"]["boards"][0]["items_page"]["items"]
+    print(f"📋 Found {len(items)} items in board")
+    
     match = next((it for it in items
                   if it["column_values"][0]["text"] == lead_email),
                  None)
     if not match:
+        print(f"❌ No item found with email: {lead_email}")
         return jsonify(status="no-item"), 200
 
-    # ─── 2) UPDATE THAT ROW’S “Last Contact” COLUMN ──────────────────────────────
+    print(f"✅ Found matching item: {match['id']}")
+
+    # ─── 2) UPDATE THAT ROW'S "Last Contact" COLUMN ──────────────────────────────
     mutation = """
     mutation($boardId: ID!, $itemId: Int!, $colId: String!, $value: JSON!) {
       change_simple_column_value(
@@ -87,7 +103,15 @@ def instantly_webhook():
     )
     if not upd.ok:
         print("❌ Monday update failed:", upd.status_code, upd.text)
+        print("🔍 Mutation variables:", vars2)
         upd.raise_for_status()
+
+    update_response = upd.json()
+    print("✅ Monday update response:", update_response)
+    
+    if "errors" in update_response:
+        print("❌ GraphQL update errors:", update_response["errors"])
+        return jsonify(status="update-error", errors=update_response["errors"]), 500
 
     return jsonify(status="updated", item=match["id"], date=date_str), 200
 
