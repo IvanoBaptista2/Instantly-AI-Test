@@ -22,6 +22,7 @@ HEADERS = {
 @app.route("/webhook", methods=["POST"])
 def instantly_webhook():
     payload = request.get_json(force=True)
+    print("📥 Incoming request payload:", payload)
 
     if payload.get("event_type") != "email.sent":
         return jsonify(status="ignored"), 200
