@@ -24,68 +24,62 @@ def instantly_webhook():
     payload = request.get_json(force=True)
     print("📥 Incoming request payload:", payload)
 
+    if payload.get("event_type") == "campaign_completed":
+        campaign_id = payload.get("campaign_id")
+        campaign_name = payload.get("campaign_name")
+        date_str = payload.get("timestamp", "").split("T")[0]
+        print(f"🚀 Handling campaign_completed: id={campaign_id}, name={campaign_name}, date={date_str}")
+        # Prepare column values for the new item (customize as needed)
+        column_values = {
+            LAST_COL: date_str
+        }
+        create_item_mutation = """
+        mutation ($boardId: ID!, $itemName: String!, $columnVals: JSON!) {
+          create_item (
+            board_id: $boardId,
+            item_name: $itemName,
+            column_values: $columnVals
+          ) {
+            id
+          }
+        }
+        """
+        create_vars = {
+            "boardId": str(BOARD_ID),
+            "itemName": campaign_name or campaign_id or "Campaign Completed",
+            "columnVals": json.dumps(column_values)
+        }
+        create_resp = requests.post(
+            "https://api.monday.com/v2",
+            json={"query": create_item_mutation, "variables": create_vars},
+            headers=HEADERS
+        )
+        if not create_resp.ok:
+            print("❌ Monday create_item failed:", create_resp.status_code, create_resp.text)
+            print("🔍 Create item variables:", create_vars)
+            create_resp.raise_for_status()
+        create_data = create_resp.json()
+        print("✅ Monday create_item response:", create_data)
+        if "errors" in create_data:
+            print("❌ GraphQL create_item errors:", create_data["errors"])
+            return jsonify(status="create-error", errors=create_data["errors"]), 500
+        new_item_id = create_data["data"]["create_item"]["id"]
+        print(f"✅ Created new campaign item: {new_item_id}")
+        return jsonify(status="created-campaign", item=new_item_id, campaign_id=campaign_id, campaign_name=campaign_name, date=date_str), 201
+
     if payload.get("event_type") != "email.sent":
         return jsonify(status="ignored"), 200
 
-    lead_email = payload["lead_email"]
-    date_str   = payload["timestamp"].split("T")[0]
+    # Always create a new item with lead_email, sender email, and date
+    lead_email = payload.get("lead_email")
+    email_account = payload.get("email_account")
+    date_str = payload.get("timestamp", "").split("T")[0]
 
-    # ─── 1) FETCH ALL ITEMS + THEIR EMAIL COLUMN ────────────────────────────────
-    query = """
-    query($boardId: ID!, $columnId: String!) {
-      boards(ids: [$boardId]) {
-        items_page {
-          items {
-            id
-            column_values(ids: [$columnId]) {
-              id
-              text
-            }
-          }
-        }
-      }
-    }
-    """
-    vars_ = {
-      "boardId": BOARD_ID,
-      "columnId": EMAIL_COL
-    }
-    resp = requests.post(
-      "https://api.monday.com/v2",
-      json={"query": query, "variables": vars_},
-      headers=HEADERS
-    )
-    if not resp.ok:
-        print("❌ Monday items lookup failed:", resp.status_code, resp.text)
-        print("🔍 Query variables:", vars_)
-        resp.raise_for_status()
-
-    response_data = resp.json()
-    print("✅ Monday API response:", response_data)
-    
-    if "errors" in response_data:
-        print("❌ GraphQL errors:", response_data["errors"])
-        return jsonify(status="graphql-error", errors=response_data["errors"]), 500
-
-    items = response_data["data"]["boards"][0]["items_page"]["items"]
-    print(f"📋 Found {len(items)} items in board")
-    
-    for it in items:
-        print(f"Item ID: {it['id']}, column_values: {it['column_values']}")
-
-    match = next(
-        (
-            it for it in items
-            if it["column_values"] and it["column_values"][0]["text"] == lead_email
-        ),
-        None
-    )
-    if not match:
-        print(f"❌ No item found with email: {lead_email}, creating new item.")
-        # Prepare column values for the new item
+    if lead_email and email_account and date_str:
         column_values = {
-            EMAIL_COL: {"email": lead_email, "text": lead_email},
-            LAST_COL: date_str
+            "email_mksf9msj": {"email": lead_email, "text": lead_email},
+            "email_mksh4e63": {"email": email_account, "text": email_account},
+            "date_mksfxnwb": date_str
         }
         create_item_mutation = """
         mutation ($boardId: ID!, $itemName: String!, $columnVals: JSON!) {
@@ -121,45 +115,7 @@ def instantly_webhook():
         print(f"✅ Created new item: {new_item_id}")
         return jsonify(status="created", item=new_item_id, email=lead_email, date=date_str), 201
 
-    print(f"✅ Found matching item: {match['id']}")
-
-    # ─── 2) UPDATE THAT ROW'S "Last Contact" COLUMN ──────────────────────────────
-    mutation = """
-    mutation($boardId: ID!, $itemId: Int!, $colId: String!, $value: JSON!) {
-      change_simple_column_value(
-        board_id:  $boardId,
-        item_id:   $itemId,
-        column_id: $colId,
-        value:     $value
-      ) {
-        id
-      }
-    }
-    """
-    vars2 = {
-      "boardId": BOARD_ID,
-      "itemId":  int(match["id"]),
-      "colId":   LAST_COL,
-      "value":   date_str
-    }
-    upd = requests.post(
-      "https://api.monday.com/v2",
-      json={"query": mutation, "variables": vars2},
-      headers=HEADERS
-    )
-    if not upd.ok:
-        print("❌ Monday update failed:", upd.status_code, upd.text)
-        print("🔍 Mutation variables:", vars2)
-        upd.raise_for_status()
-
-    update_response = upd.json()
-    print("✅ Monday update response:", update_response)
-    
-    if "errors" in update_response:
-        print("❌ GraphQL update errors:", update_response["errors"])
-        return jsonify(status="update-error", errors=update_response["errors"]), 500
-
-    return jsonify(status="updated", item=match["id"], date=date_str), 200
+    return jsonify(status="created"), 201
 
 # ─── RUN ───────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
