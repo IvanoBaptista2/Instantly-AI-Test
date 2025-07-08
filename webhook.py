@@ -85,7 +85,7 @@ def instantly_webhook():
             "lead_company": payload.get("companyName"),
             "title__1": payload.get("jobTitle"),
             "tekst_1__1": payload.get("linkedIn"),
-            "date": payload.get("timestamp", "").split("T")[0],
+            "date": payload.get("timestamp", ""),  # Store full timestamp (date and time)
             "email_type_mkmpw2vk": payload.get("email_account"),
             "email_status_mkmp5hf8": payload.get("event_type"),
         }
@@ -105,7 +105,7 @@ def instantly_webhook():
         create_vars = {
             "boardId": str(BOARD_ID),
             "groupId": "group_mknz7nc",  # <--- put the group id here
-            "itemName": lead_email,
+            "itemName": f"{payload.get('firstName', '')} {payload.get('lastName', '')}".strip() or lead_email,
             "columnVals": json.dumps(column_values)
         }
         create_resp = requests.post(
