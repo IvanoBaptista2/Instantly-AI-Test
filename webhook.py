@@ -34,9 +34,10 @@ def instantly_webhook():
             LAST_COL: date_str
         }
         create_item_mutation = """
-        mutation ($boardId: ID!, $itemName: String!, $columnVals: JSON!) {
+        mutation ($boardId: ID!, $groupId: String!, $itemName: String!, $columnVals: JSON!) {
           create_item (
             board_id: $boardId,
+            group_id: $groupId,
             item_name: $itemName,
             column_values: $columnVals
           ) {
@@ -46,6 +47,7 @@ def instantly_webhook():
         """
         create_vars = {
             "boardId": str(BOARD_ID),
+            "groupId": "your_group_id_here",  # <--- put the group id here
             "itemName": campaign_name or campaign_id or "Campaign Completed",
             "columnVals": json.dumps(column_values)
         }
@@ -77,15 +79,22 @@ def instantly_webhook():
 
     if lead_email and email_account and date_str:
         column_values = {
-            "email_mksf9msj": {"email": lead_email, "text": lead_email},
-            "email_mksh4e63": {"email": email_account, "text": email_account},
-            "date_mksfxnwb": date_str
+            "lead_email": {"email": payload["lead_email"], "text": payload["lead_email"]},
+            "tekst__1": payload.get("firstName"),
+            "tekst6__1": payload.get("lastName"),
+            "lead_company": payload.get("companyName"),
+            "title__1": payload.get("jobTitle"),
+            "tekst_1__1": payload.get("linkedIn"),
+            "date": payload.get("timestamp", "").split("T")[0],
+            "email_type_mkmpw2vk": payload.get("email_account"),
+            "email_status_mkmp5hf8": payload.get("event_type"),
         }
         print("About to post to Monday.com:", column_values)
         create_item_mutation = """
-        mutation ($boardId: ID!, $itemName: String!, $columnVals: JSON!) {
+        mutation ($boardId: ID!, $groupId: String!, $itemName: String!, $columnVals: JSON!) {
           create_item (
             board_id: $boardId,
+            group_id: $groupId,
             item_name: $itemName,
             column_values: $columnVals
           ) {
@@ -95,6 +104,7 @@ def instantly_webhook():
         """
         create_vars = {
             "boardId": str(BOARD_ID),
+            "groupId": "group_mknz7nc",  # <--- put the group id here
             "itemName": lead_email,
             "columnVals": json.dumps(column_values)
         }
