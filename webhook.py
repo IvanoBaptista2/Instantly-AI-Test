@@ -4,6 +4,7 @@ import os
 import requests
 import json
 from flask import Flask, request, jsonify
+from datetime import datetime
 
 app = Flask(__name__)
 
@@ -78,6 +79,17 @@ def instantly_webhook():
     date_str = payload.get("timestamp", "").split("T")[0]
 
     if lead_email and email_account and date_str:
+        timestamp = payload.get("timestamp", "")
+        date_part = ""
+        time_part = ""
+        if timestamp:
+            try:
+                dt = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+                date_part = dt.strftime("%Y-%m-%d")
+                time_part = dt.strftime("%H:%M:%S")
+            except Exception as e:
+                print("Timestamp parsing error:", e)
+
         column_values = {
             "lead_email": {"email": payload["lead_email"], "text": payload["lead_email"]},
             "tekst__1": payload.get("firstName"),
@@ -85,7 +97,7 @@ def instantly_webhook():
             "lead_company": payload.get("companyName"),
             "title__1": payload.get("jobTitle"),
             "tekst_1__1": payload.get("linkedIn"),
-            "date": payload.get("timestamp", ""),  # Store full timestamp (date and time)
+            "date": {"date": date_part, "time": time_part},
             "email_type_mkmpw2vk": payload.get("email_account"),
             "email_status_mkmp5hf8": payload.get("event_type"),
         }
