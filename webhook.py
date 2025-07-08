@@ -67,7 +67,7 @@ def instantly_webhook():
         print(f"✅ Created new campaign item: {new_item_id}")
         return jsonify(status="created-campaign", item=new_item_id, campaign_id=campaign_id, campaign_name=campaign_name, date=date_str), 201
 
-    if payload.get("event_type") != "email.sent":
+    if payload.get("event_type") != "email_sent":
         return jsonify(status="ignored"), 200
 
     # Always create a new item with lead_email, sender email, and date
