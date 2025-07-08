@@ -81,6 +81,7 @@ def instantly_webhook():
             "email_mksh4e63": {"email": email_account, "text": email_account},
             "date_mksfxnwb": date_str
         }
+        print("About to post to Monday.com:", column_values)
         create_item_mutation = """
         mutation ($boardId: ID!, $itemName: String!, $columnVals: JSON!) {
           create_item (
