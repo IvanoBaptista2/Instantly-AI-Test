@@ -144,6 +144,7 @@ def instantly_webhook():
 
         # Fetch the email thread from Instantly (replace with real API call)
         email_thread = get_email_thread_from_instantly(lead_email, email_account)
+        print("Fetched email thread from Instantly:\n", email_thread)
 
         # 1. Check if the item already exists by lead_email
         find_item_query = '''
