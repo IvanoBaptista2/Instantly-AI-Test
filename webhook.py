@@ -144,7 +144,7 @@ def instantly_webhook():
             }
             ''' % BOARD_ID
             update_column_values = {
-                LONG_TEXT_COL: new_thread,
+                LONG_TEXT_COL: {"text": new_thread},
                 LAST_CONTACTED_COL: {"date": date_part, "time": time_part}
             }
             update_vars = {"itemId": item_id, "columnVals": json.dumps(update_column_values)}
@@ -175,7 +175,7 @@ def instantly_webhook():
                 "date": {"date": date_part, "time": time_part},
                 "email_type_mkmpw2vk": payload.get("email_account"),
                 "email_status_mkmp5hf8": payload.get("event_type"),
-                LONG_TEXT_COL: email_thread
+                LONG_TEXT_COL: {"text": email_thread}
             }
             print("About to post to Monday.com:", json.dumps(column_values, indent=2))
             create_item_mutation = """
