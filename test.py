@@ -20,8 +20,6 @@ def fetch_email_thread(lead_email):
         headers=headers,
         params=params
     )
-    print(f"[DEBUG] Instantly API status: {resp.status_code}")
-    print(f"[DEBUG] Instantly API raw response:\n{resp.text}\n")
     resp.raise_for_status()
     payload = resp.json()
     emails = []
@@ -34,7 +32,7 @@ def fetch_email_thread(lead_email):
 
     if not emails:
         print(f"No emails found for {lead_email}")
-        return
+        return "No emails found for this lead."
 
     # Group by thread_id
     threads = {}
@@ -42,9 +40,14 @@ def fetch_email_thread(lead_email):
         tid = em.get("thread_id") or "_no_thread_"
         threads.setdefault(tid, []).append(em)
 
+    # Build the email thread as a string
+    thread_content = []
+    
     # Print each thread
     for tid, msgs in threads.items():
         print(f"\n=== Thread {tid} ===")
+        thread_content.append(f"=== Thread {tid} ===")
+        
         msgs.sort(key=lambda e: e.get("timestamp_email") or "")
         for m in msgs:
             ts   = m.get("timestamp_email", "")
@@ -55,7 +58,17 @@ def fetch_email_thread(lead_email):
                 or m.get("plain_body", "")
                 or m.get("body", {}).get("html", "")
             ).strip()
+            
+            # Print to console
             print(f"[{ts}] {frm}: {sub}\n{body}\n")
+            
+            # Add to thread content
+            thread_content.append(f"[{ts}] {frm}: {sub}")
+            thread_content.append(body)
+            thread_content.append("")  # Empty line for spacing
+
+    # Return the formatted thread as a string
+    return "\n".join(thread_content)
 
 if __name__ == "__main__":
     # 1. List all leads
