@@ -5,71 +5,9 @@ import requests
 import json
 from flask import Flask, request, jsonify
 from datetime import datetime
+from test import fetch_email_thread
 
 app = Flask(__name__)
-
-# Add a placeholder for fetching the email thread from Instantly
-
-def get_email_thread_from_instantly(lead_email, email_account):
-    """
-    Fetches all emails for a lead from Instantly (v2), sorted ascending,
-    and returns them concatenated by thread_id and timestamp.
-    """
-    INSTANTLY_API_KEY = os.getenv("INSTANTLY_API_KEY")
-    BASE_URL = "https://api.instantly.ai/api/v2"
-    headers = {
-        "Authorization": f"Bearer {INSTANTLY_API_KEY}",
-        "Content-Type":  "application/json",
-    }
-    params = {
-        "lead": lead_email,
-        "limit": 100,
-        "sort_order": "asc",
-    }
-    resp = requests.get(
-        f"{BASE_URL}/emails",
-        headers=headers,
-        params=params
-    )
-    print(f"[DEBUG] Instantly API status: {resp.status_code}")
-    print(f"[DEBUG] Instantly API raw response:\n{resp.text}\n")
-    resp.raise_for_status()
-    payload = resp.json()
-    emails = []
-    if "items" in payload and isinstance(payload["items"], list):
-        emails = payload["items"]
-    elif "data" in payload and isinstance(payload["data"], list):
-        emails = payload["data"]
-    elif "emails" in payload and isinstance(payload["emails"], list):
-        emails = payload["emails"]
-
-    if not emails:
-        return ""  # no emails for this lead
-
-    # Group by thread_id
-    threads = {}
-    for em in emails:
-        tid = em.get("thread_id") or "_no_thread_"
-        threads.setdefault(tid, []).append(em)
-
-    # Build human-readable string for each thread
-    sections = []
-    for tid, msgs in threads.items():
-        msgs.sort(key=lambda e: e.get("timestamp_email") or "")
-        lines = [f"=== Thread {tid} ==="]
-        for m in msgs:
-            ts   = m.get("timestamp_email", "")
-            frm  = m.get("from") or m.get("sender") or m.get("from_address_email") or ""
-            sub  = m.get("subject", "")
-            body = (
-                m.get("body", {}).get("text")
-                or m.get("plain_body", "")
-                or m.get("body", {}).get("html", "")
-            ).strip()
-            lines.append(f"[{ts}] {frm}: {sub}\n{body}\n")
-        sections.append("\n".join(lines))
-
-    return "\n---\n".join(sections)
 
 # ─── CONFIG FROM ENV ────────────────────────────────────────────────────────────
 M_TOKEN      = os.getenv("MONDAY_API_TOKEN")
@@ -153,7 +91,7 @@ def instantly_webhook():
                 print("Timestamp parsing error:", e)
 
         # Fetch the email thread from Instantly (replace with real API call)
-        email_thread = get_email_thread_from_instantly(lead_email, email_account)
+        email_thread = fetch_email_thread(lead_email)
 
         # 1. Check if the item already exists by lead_email
         find_item_query = '''
