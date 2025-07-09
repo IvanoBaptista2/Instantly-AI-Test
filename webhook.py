@@ -107,14 +107,23 @@ def instantly_webhook():
         }
         '''
         variables = {"boardId": int(BOARD_ID), "email": lead_email}
+        print("🔍 Checking for existing item with email:", lead_email)
+        print("🔍 Query variables:", json.dumps(variables, indent=2))
         resp = requests.post(
             "https://api.monday.com/v2",
             headers=HEADERS,
             json={"query": find_item_query, "variables": variables}
         )
-        resp.raise_for_status()
+        print(f"🔍 Monday.com find query status: {resp.status_code}")
+        print(f"🔍 Monday.com find query response: {resp.text}")
+        
+        if not resp.ok:
+            print("❌ Monday find query failed:", resp.status_code, resp.text)
+            resp.raise_for_status()
+            
         data = resp.json()
         items = data.get("data", {}).get("items_by_column_values", [])
+        print(f"🔍 Found {len(items)} existing items")
 
         # Column IDs
         LONG_TEXT_COL = "long_text_mkspw74e"
@@ -124,6 +133,7 @@ def instantly_webhook():
             # Item exists, update it
             item = items[0]
             item_id = int(item["id"])
+            print(f"🔄 Updating existing item: {item_id}")
             # Get current thread value
             current_thread = ""
             for cv in item["column_values"]:
@@ -148,11 +158,15 @@ def instantly_webhook():
                 LAST_CONTACTED_COL: {"date": date_part, "time": time_part}
             }
             update_vars = {"itemId": item_id, "columnVals": json.dumps(update_column_values)}
+            print("🔄 Update variables:", json.dumps(update_vars, indent=2))
             update_resp = requests.post(
                 "https://api.monday.com/v2",
                 headers=HEADERS,
                 json={"query": update_mutation, "variables": update_vars}
             )
+            print(f"🔄 Monday.com update status: {update_resp.status_code}")
+            print(f"🔄 Monday.com update response: {update_resp.text}")
+            
             if not update_resp.ok:
                 print("❌ Monday update_item failed:", update_resp.status_code, update_resp.text)
                 print("🔍 Update item variables:", update_vars)
@@ -165,6 +179,7 @@ def instantly_webhook():
             return jsonify(status="updated", item=item_id, email=lead_email, date=date_str), 200
         else:
             # Item does not exist, create it
+            print("🆕 Creating new item")
             column_values = {
                 "lead_email": {"email": payload["lead_email"], "text": payload["lead_email"]},
                 "tekst__1": payload.get("firstName"),
@@ -202,6 +217,9 @@ def instantly_webhook():
                 json={"query": create_item_mutation, "variables": create_vars},
                 headers=HEADERS
             )
+            print(f"🆕 Monday.com create status: {create_resp.status_code}")
+            print(f"🆕 Monday.com create response: {create_resp.text}")
+            
             if not create_resp.ok:
                 print("❌ Monday create_item failed:", create_resp.status_code, create_resp.text)
                 print("🔍 Create item variables:", create_vars)
