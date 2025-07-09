@@ -95,18 +95,21 @@ def instantly_webhook():
 
         # 1. Check if the item already exists by lead_email
         find_item_query = '''
-        query ($boardId: [Int], $email: String) {
-          items_by_column_values(board_id: $boardId, column_id: "lead_email", column_value: $email) {
-            id
-            name
-            column_values {
+        query ($boardId: [Int]) {
+          boards(ids: $boardId) {
+            items {
               id
-              value
+              name
+              column_values {
+                id
+                value
+                text
+              }
             }
           }
         }
         '''
-        variables = {"boardId": int(BOARD_ID), "email": lead_email}
+        variables = {"boardId": [int(BOARD_ID)]}
         print("🔍 Checking for existing item with email:", lead_email)
         print("🔍 Query variables:", json.dumps(variables, indent=2))
         resp = requests.post(
@@ -122,8 +125,24 @@ def instantly_webhook():
             resp.raise_for_status()
             
         data = resp.json()
-        items = data.get("data", {}).get("items_by_column_values", [])
-        print(f"🔍 Found {len(items)} existing items")
+        all_items = data.get("data", {}).get("boards", [{}])[0].get("items", [])
+        
+        # Filter items by email
+        items = []
+        for item in all_items:
+            for cv in item.get("column_values", []):
+                if cv.get("id") == "lead_email":
+                    try:
+                        email_val = json.loads(cv.get("value", "{}"))
+                        if email_val.get("email") == lead_email or email_val.get("text") == lead_email:
+                            items.append(item)
+                            break
+                    except:
+                        if cv.get("text") == lead_email:
+                            items.append(item)
+                            break
+        
+        print(f"🔍 Found {len(items)} existing items with email {lead_email}")
 
         # Column IDs
         LONG_TEXT_COL = "long_text_mkspw74e"
