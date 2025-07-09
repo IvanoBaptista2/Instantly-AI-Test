@@ -30,12 +30,10 @@ def get_email_thread_from_instantly(lead_email, email_account):
     }
 
     resp = requests.get(url, headers=headers, params=params)
-    # Log raw Instantly response for debugging
     app.logger.debug("Instantly /emails response [%s]: %s", resp.status_code, resp.text)
     resp.raise_for_status()
 
     payload = resp.json()
-    # Extract email list
     emails = (payload.get("data") if isinstance(payload.get("data"), list)
               else payload.get("emails", []))
     if not emails and isinstance(payload, list):
@@ -44,13 +42,11 @@ def get_email_thread_from_instantly(lead_email, email_account):
     if not emails:
         return ""  # no emails for this lead
 
-    # Group by thread_id
     threads = {}
     for em in emails:
         tid = em.get("thread_id") or "_no_thread_"
         threads.setdefault(tid, []).append(em)
 
-    # Build human-readable string for each thread
     sections = []
     for tid, msgs in threads.items():
         msgs.sort(key=lambda e: e.get("timestamp_email") or "")
@@ -83,17 +79,12 @@ def instantly_webhook():
     payload = request.get_json(force=True)
     app.logger.info("📥 Incoming payload: %s", payload)
 
-    # Handle campaign_completed
     if payload.get("event_type") == "campaign_completed":
         campaign_id   = payload.get("campaign_id")
         campaign_name = payload.get("campaign_name")
         date_str      = payload.get("timestamp", "").split("T")[0]
-
-        app.logger.info("🚀 campaign_completed: %s (%s) on %s",
-                        campaign_name, campaign_id, date_str)
-
         column_values = { LAST_COL: date_str }
-        create_item_mutation = """
+        mutation = """
             mutation ($boardId: ID!, $groupId: String!, $itemName: String!, $columnVals: JSON!) {
               create_item (
                 board_id: $boardId,
@@ -103,36 +94,28 @@ def instantly_webhook():
               ) { id }
             }
         """
-        create_vars = {
+        vars = {
             "boardId":   str(BOARD_ID),
             "groupId":   "your_group_id_here",
             "itemName":  campaign_name or campaign_id or "Campaign Completed",
             "columnVals": json.dumps(column_values)
         }
-        resp = requests.post(
+        r = requests.post(
             "https://api.monday.com/v2",
-            json={"query": create_item_mutation, "variables": create_vars},
+            json={"query": mutation, "variables": vars},
             headers=HEADERS
         )
-        if not resp.ok:
-            app.logger.error("❌ Monday create_item failed: %s %s", resp.status_code, resp.text)
-            resp.raise_for_status()
-        data = resp.json()
-        if "errors" in data:
-            return jsonify(status="create-error", errors=data["errors"]), 500
+        r.raise_for_status()
+        resp = r.json()
+        if resp.get("errors"): return jsonify(status="create-error", errors=resp["errors"]), 500
+        return jsonify(status="created-campaign", item=resp["data"]["create_item"]["id"]), 201
 
-        new_item_id = data["data"]["create_item"]["id"]
-        return jsonify(status="created-campaign", item=new_item_id), 201
-
-    # Only handle email_sent
     if payload.get("event_type") != "email_sent":
         return jsonify(status="ignored"), 200
 
     lead_email    = payload.get("lead_email")
     email_account = payload.get("email_account")
     timestamp     = payload.get("timestamp", "")
-
-    # Parse date & time
     date_part, time_part = "", ""
     if timestamp:
         try:
@@ -142,63 +125,53 @@ def instantly_webhook():
         except Exception as e:
             app.logger.warning("Timestamp parsing error: %s", e)
 
-    # Fetch email thread from Instantly
     email_thread = get_email_thread_from_instantly(lead_email, email_account)
     app.logger.info("📨 Fetched email thread (%d chars)", len(email_thread))
 
-    # 1) Find existing item by lead_email
+    # ─── 1) Find existing item by lead_email ────────────────────────────────────
     find_query = """
-        query ($boardId: Int!, $columnId: String!, $columnValue: String!) {
-          items_by_column_values(
-            board_id: $boardId,
-            column_id: $columnId,
-            column_value: $columnValue
-          ) {
+      query ($boardId: Int!, $emailCol: String!, $emailVal: String!) {
+        items_page_by_column_values(
+          board_id: $boardId,
+          columns: [{ column_id: $emailCol, column_values: [$emailVal] }]
+        ) {
+          items {
             id
             column_values { id, value }
           }
         }
+      }
     """
     find_vars = {
-        "boardId": int(BOARD_ID),
-        "columnId": EMAIL_COL,
-        "columnValue": lead_email
+        "boardId":  int(BOARD_ID),
+        "emailCol": EMAIL_COL,
+        "emailVal": lead_email
     }
     find_resp = requests.post(
         "https://api.monday.com/v2",
         headers=HEADERS,
         json={"query": find_query, "variables": find_vars}
     )
-    app.logger.debug("Monday find_item response [%s]: %s", find_resp.status_code, find_resp.text)
-    try:
-        find_resp.raise_for_status()
-    except Exception:
-        return jsonify(status="monday-find-error", detail=find_resp.text), 500
+    find_resp.raise_for_status()
+    items = find_resp.json().get("data", {}) \
+                   .get("items_page_by_column_values", {}) \
+                   .get("items", [])
 
-    items = find_resp.json().get("data", {}).get("items_by_column_values", [])
-
-    # Column IDs
-    LONG_TEXT_COL    = "long_text_mkspw74e"
+    LONG_TEXT_COL     = "long_text_mkspw74e"
     LAST_CONTACTED_COL = "date"
 
     if items:
-        # Update existing item
         item = items[0]
         item_id = int(item["id"])
-
-        # Extract current thread
         current_thread = ""
         for cv in item["column_values"]:
             if cv["id"] == LONG_TEXT_COL:
                 try:
                     val = json.loads(cv["value"]) if cv["value"] else {}
                     current_thread = val.get("text", "")
-                except Exception:
+                except:
                     current_thread = cv["value"] or ""
-
-        # Append new thread
         new_thread = (current_thread + "\n---\n" if current_thread else "") + email_thread
-
         update_mutation = f"""
             mutation ($itemId: Int!, $columnVals: JSON!) {{
               change_column_values(
@@ -208,27 +181,19 @@ def instantly_webhook():
               ) {{ id }}
             }}
         """
-        update_column_values = {
+        update_vals = {
             LONG_TEXT_COL: new_thread,
             LAST_CONTACTED_COL: {"date": date_part, "time": time_part}
         }
-        update_vars = {"itemId": item_id, "columnVals": json.dumps(update_column_values)}
-
-        update_resp = requests.post(
+        update_vars = {"itemId": item_id, "columnVals": json.dumps(update_vals)}
+        upd = requests.post(
             "https://api.monday.com/v2",
             headers=HEADERS,
             json={"query": update_mutation, "variables": update_vars}
         )
-        app.logger.debug("Monday update_item response [%s]: %s", update_resp.status_code, update_resp.text)
-        try:
-            update_resp.raise_for_status()
-        except Exception:
-            return jsonify(status="update-error", detail=update_resp.text), 500
-
+        upd.raise_for_status()
         return jsonify(status="updated", item=item_id), 200
-
     else:
-        # Create new item
         column_values = {
             EMAIL_COL:             {"email": lead_email, "text": lead_email},
             "tekst__1":            payload.get("firstName"),
@@ -241,8 +206,6 @@ def instantly_webhook():
             "email_status_mkmp5hf8":payload.get("event_type"),
             LONG_TEXT_COL:         email_thread
         }
-        app.logger.info("Creating new item with columns: %s", column_values)
-
         create_mutation = """
             mutation ($boardId: ID!, $groupId: String!, $itemName: String!, $columnVals: JSON!) {
               create_item (
@@ -259,24 +222,17 @@ def instantly_webhook():
             "itemName":  f"{payload.get('firstName','')} {payload.get('lastName','')}".strip() or lead_email,
             "columnVals": json.dumps(column_values)
         }
-
         create_resp = requests.post(
             "https://api.monday.com/v2",
             headers=HEADERS,
             json={"query": create_mutation, "variables": create_vars}
         )
-        app.logger.debug("Monday create_item response [%s]: %s", create_resp.status_code, create_resp.text)
-        try:
-            create_resp.raise_for_status()
-        except Exception:
-            return jsonify(status="create-error", detail=create_resp.text), 500
-
+        create_resp.raise_for_status()
         new_item_id = create_resp.json()["data"]["create_item"]["id"]
         return jsonify(status="created", item=new_item_id), 201
 
     return jsonify(status="ignored"), 200
 
-# ─── RUN ───────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "5001"))
     print(f"🚀 Listening on http://0.0.0.0:{port}/webhook")
