@@ -5,51 +5,61 @@ import requests
 import json
 from flask import Flask, request, jsonify
 from datetime import datetime
-from collections import defaultdict
 
 app = Flask(__name__)
 
-# Add a placeholder for fetching the email thread from Instantly
+# ─── INSTANTLY API SETUP ───────────────────────────────────────────────────────
+INSTANTLY_API_KEY = os.getenv("INSTANTLY_API_KEY")
+if not INSTANTLY_API_KEY:
+    raise RuntimeError("Missing INSTANTLY_API_KEY in environment")
 
-def get_email_thread_from_instantly(lead_email, email_account=None):
-    # Fetch all emails for the lead from Instantly API
-    url = f"https://api.instantly.ai/api/v2/emails?lead={lead_email}&sort=asc"
-    headers = {"Authorization": f"Bearer {os.getenv('INSTANTLY_API_KEY', 'YOUR_INSTANTLY_API_KEY')}"}
-    all_emails = []
-    page = 1
-    while True:
-        resp = requests.get(url + f"&page={page}", headers=headers)
-        if not resp.ok:
-            print(f"Instantly API error: {resp.status_code} {resp.text}")
-            break
-        data = resp.json()
-        emails = data.get("data") or data.get("emails") or data.get("results") or data
-        if not emails:
-            break
-        all_emails.extend(emails)
-        if len(emails) < 50:  # Assume 50 per page, stop if less
-            break
-        page += 1
+def get_email_thread_from_instantly(lead_email, email_account):
+    """
+    Fetches all emails for a lead from Instantly, sorted ascending, and
+    returns them concatenated by thread_id and timestamp.
+    """
+    url = "https://api.instantly.ai/api/v2/emails"
+    params = {
+        "lead": lead_email,
+        "limit": 100,
+        "sort_order": "asc",
+    }
+    headers = {
+        "Authorization": f"Bearer {INSTANTLY_API_KEY}",
+        "Content-Type": "application/json",
+    }
+
+    resp = requests.get(url, headers=headers, params=params)
+    resp.raise_for_status()
+    payload = resp.json()
+
+    # Instantly may return the emails array either as payload["data"] or top-level list
+    emails = payload.get("data") if isinstance(payload.get("data"), list) else payload.get("emails", [])
+    if not emails and isinstance(payload, list):
+        emails = payload
+
     # Group by thread_id
-    threads = defaultdict(list)
-    for email in all_emails:
-        thread_id = email.get("thread_id") or email.get("threadId") or "unknown"
-        threads[thread_id].append(email)
-    # Format threads
-    formatted_threads = []
-    for thread_id, messages in threads.items():
-        # Sort messages by timestamp
-        messages.sort(key=lambda x: x.get("timestamp") or x.get("created_at") or "")
-        thread_lines = [f"Thread {thread_id}:"]
-        for msg in messages:
-            ts = msg.get("timestamp") or msg.get("created_at") or ""
-            from_addr = msg.get("from") or msg.get("from_email") or msg.get("sender") or "?"
-            to_addr = msg.get("to") or msg.get("to_email") or msg.get("recipient") or "?"
-            subject = msg.get("subject") or ""
-            body = msg.get("body") or msg.get("text") or msg.get("content") or ""
-            thread_lines.append(f"[{ts}] {from_addr} → {to_addr}: {subject}\n{body}")
-        formatted_threads.append("\n".join(thread_lines))
-    return "\n---\n".join(formatted_threads) if formatted_threads else "No email thread found."
+    threads = {}
+    for em in emails:
+        tid = em.get("thread_id") or "_no_thread_"
+        threads.setdefault(tid, []).append(em)
+
+    # Build a human-readable string for each thread
+    sections = []
+    for tid, msgs in threads.items():
+        # sort each thread by timestamp
+        msgs.sort(key=lambda e: e.get("timestamp_email") or e.get("timestamp") or "")
+        lines = [f"=== Thread {tid} ==="]
+        for m in msgs:
+            ts   = m.get("timestamp_email") or m.get("timestamp") or ""
+            frm  = m.get("from") or m.get("sender") or ""
+            to   = lead_email
+            sub  = m.get("subject", "")
+            body = m.get("body", m.get("plain_body", "")).strip()
+            lines.append(f"[{ts}] {frm} → {to}: {sub}\n{body}")
+        sections.append("\n\n".join(lines))
+
+    return "\n\n---\n\n".join(sections) or f"No emails found for {lead_email}"
 
 # ─── CONFIG FROM ENV ────────────────────────────────────────────────────────────
 M_TOKEN      = os.getenv("MONDAY_API_TOKEN")
