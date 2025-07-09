@@ -239,7 +239,7 @@ def instantly_webhook():
                 "email_status_mkmp5hf8": payload.get("event_type"),
                 LONG_TEXT_COL: email_thread
             }
-            print("About to post to Monday.com:", column_values)
+            print("About to post to Monday.com:", json.dumps(column_values, indent=2))
             create_item_mutation = """
             mutation ($boardId: ID!, $groupId: String!, $itemName: String!, $columnVals: JSON!) {
               create_item (
@@ -258,6 +258,7 @@ def instantly_webhook():
                 "itemName": f"{payload.get('firstName', '')} {payload.get('lastName', '')}".strip() or lead_email,
                 "columnVals": json.dumps(column_values)
             }
+            print("GraphQL variables:", json.dumps(create_vars, indent=2))
             create_resp = requests.post(
                 "https://api.monday.com/v2",
                 json={"query": create_item_mutation, "variables": create_vars},
