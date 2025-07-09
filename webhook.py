@@ -104,6 +104,7 @@ def instantly_webhook():
             "date": {"date": date_part, "time": time_part},
             "email_type_mkmpw2vk": payload.get("email_account"),
             "email_status_mkmp5hf8": payload.get("event_type"),
+            "long_text_mkspw74e": {"text": email_thread}
         }
         print("About to post to Monday.com:", json.dumps(column_values, indent=2))
         create_item_mutation = """
