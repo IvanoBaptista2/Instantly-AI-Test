@@ -148,11 +148,11 @@ def instantly_webhook():
 
     # 1) Find existing item by lead_email
     find_query = """
-        query ($boardId: Int!, $colId: String!, $colVal: String!) {
+        query ($boardId: Int!, $columnId: String!, $columnValue: String!) {
           items_by_column_values(
             board_id: $boardId,
-            column_id: $colId,
-            column_value: $colVal
+            column_id: $columnId,
+            column_value: $columnValue
           ) {
             id
             column_values { id, value }
@@ -161,8 +161,8 @@ def instantly_webhook():
     """
     find_vars = {
         "boardId": int(BOARD_ID),
-        "colId":   EMAIL_COL,
-        "colVal":  lead_email
+        "columnId": EMAIL_COL,
+        "columnValue": lead_email
     }
     find_resp = requests.post(
         "https://api.monday.com/v2",
