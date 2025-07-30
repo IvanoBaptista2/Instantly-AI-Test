@@ -1,179 +1,125 @@
 #!/usr/bin/env python3
 import os
-import requests
 import json
+import requests
 from datetime import datetime, timedelta
 from test import fetch_email_thread
 
 # ─── CONFIG FROM ENV ────────────────────────────────────────────────────────────
-M_TOKEN      = os.getenv("MONDAY_API_TOKEN")
-BOARD_ID     = os.getenv("MONDAY_BOARD_ID")
-EMAIL_COL    = os.getenv("MONDAY_EMAIL_COL")
-LAST_COL     = os.getenv("MONDAY_LAST_CONTACT")
+M_TOKEN   = os.getenv("MONDAY_API_TOKEN")
+BOARD_ID  = int(os.getenv("MONDAY_BOARD_ID", "0"))       # cast to int!
+EMAIL_COL = os.getenv("MONDAY_EMAIL_COL")                # e.g. "lead_email"
+LAST_COL  = os.getenv("MONDAY_LAST_CONTACT")              # e.g. "date_mksfxnwb"
+THREAD_COL = "long_text_mkspw74e"
 
 HEADERS = {
     "Authorization": M_TOKEN,
     "Content-Type":  "application/json",
 }
 
-def get_monday_items():
-    """Fetch all items from Monday.com board"""
-    query = '''
-    query ($boardId: ID!) {
-        boards(ids: [$boardId]) {
-            items {
-                id
-                name
-                column_values {
-                    id
-                    value
-                    text
-                }
-            }
+# ─── GRAPHQL TEMPLATES ──────────────────────────────────────────────────────────
+GET_ITEMS = f'''
+query GetStaleItems($boardId: Int!) {{
+  boards(ids: [$boardId]) {{
+    items {{
+      id
+      column_values(ids: ["{EMAIL_COL}", "{THREAD_COL}", "{LAST_COL}"]) {{
+        id
+        text
+      }}
+    }}
+  }}
+}}
+'''
+
+UPDATE_MUTATION = '''
+mutation UpdateThread($boardId: Int!, $itemId: Int!, $cols: JSON!) {
+  change_multiple_column_values(
+    board_id: $boardId,
+    item_id: $itemId,
+    column_values: $cols
+  ) { id }
+}
+'''
+
+def sync_threads():
+    print(f"\n🔄 sync_threads started at {datetime.utcnow().isoformat()}Z")
+
+    # 1) Fetch items
+    resp = requests.post(
+        "https://api.monday.com/v2",
+        headers=HEADERS,
+        json={
+            "query":     GET_ITEMS,
+            "variables": {"boardId": BOARD_ID}
         }
-    }
-    '''
-    
-    resp = requests.post(
-        "https://api.monday.com/v2",
-        json={"query": query, "variables": {"boardId": BOARD_ID}},
-        headers=HEADERS
     )
-    resp.raise_for_status()
     data = resp.json()
-    
-    if data.get("errors"):
-        print("❌ GraphQL errors:", data["errors"])
-        return []
-    
-    return data["data"]["boards"][0]["items"]
+    if errors := data.get("errors"):
+        print("❌ GraphQL errors fetching items:", errors)
+        return
 
-def get_email_from_item(item):
-    """Extract email from Monday.com item"""
-    for col in item["column_values"]:
-        if col["id"] == EMAIL_COL:
-            try:
-                email_data = json.loads(col["value"])
-                return email_data.get("email", "")
-            except:
-                return col.get("text", "")
-    return ""
+    items = data["data"]["boards"][0]["items"]
+    cutoff = datetime.utcnow() - timedelta(days=2)
 
-def get_last_contact_date(item):
-    """Extract last contact date from Monday.com item"""
-    for col in item["column_values"]:
-        if col["id"] == LAST_COL:
-            try:
-                date_data = json.loads(col["value"])
-                return date_data.get("date", "")
-            except:
-                return col.get("text", "")
-    return ""
+    for it in items:
+        # build a map of column_id -> text
+        cvs = { cv["id"]: cv["text"] or "" for cv in it["column_values"] }
+        email = cvs.get(EMAIL_COL, "").strip()
+        last_str = cvs.get(LAST_COL, "").strip()
 
-def is_older_than_days(date_str, days=2):
-    """Check if date is older than specified days"""
-    if not date_str:
-        return False
-    
-    try:
-        # Parse the date string (adjust format as needed)
-        if "T" in date_str:
-            date_obj = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
-        else:
-            date_obj = datetime.strptime(date_str, "%Y-%m-%d")
-        
-        days_ago = datetime.now() - timedelta(days=days)
-        return date_obj < days_ago
-    except Exception as e:
-        print(f"Error parsing date {date_str}: {e}")
-        return False
-
-def update_item_thread(item_id, new_thread):
-    """Update Monday.com item with new email thread"""
-    mutation = '''
-    mutation ($itemId: ID!, $columnVals: JSON!) {
-        change_column_value(
-            item_id: $itemId,
-            column_id: "long_text_mkspw74e",
-            value: $columnVals
-        ) { id }
-    }
-    '''
-    
-    thread_data = {"text": new_thread}
-    vars = {
-        "itemId": item_id,
-        "columnVals": json.dumps(thread_data)
-    }
-    
-    resp = requests.post(
-        "https://api.monday.com/v2",
-        json={"query": mutation, "variables": vars},
-        headers=HEADERS
-    )
-    
-    if not resp.ok:
-        print(f"❌ Update failed for item {item_id}:", resp.status_code, resp.text)
-        return False
-    
-    data = resp.json()
-    if data.get("errors"):
-        print(f"❌ GraphQL errors for item {item_id}:", data["errors"])
-        return False
-    
-    print(f"✅ Updated thread for item {item_id}")
-    return True
-
-def main():
-    print("🔄 Starting thread sync process...")
-    
-    # 1. Fetch all items from Monday.com
-    print("📥 Fetching items from Monday.com...")
-    items = get_monday_items()
-    print(f"Found {len(items)} items")
-    
-    # 2. Filter items with emails and threads
-    items_with_emails = []
-    for item in items:
-        email = get_email_from_item(item)
-        if email:
-            items_with_emails.append({
-                "id": item["id"],
-                "name": item["name"],
-                "email": email,
-                "last_contact": get_last_contact_date(item)
-            })
-    
-    print(f"Found {len(items_with_emails)} items with emails")
-    
-    # 3. Find items older than 2 days
-    old_items = []
-    for item in items_with_emails:
-        if is_older_than_days(item["last_contact"], days=2):
-            old_items.append(item)
-    
-    print(f"Found {len(old_items)} items with last contact 2+ days ago")
-    
-    # 4. Re-fetch threads and update
-    updated_count = 0
-    for item in old_items:
-        print(f"🔄 Processing {item['email']} (Item {item['id']})")
-        
+        # parse last contact
         try:
-            # Fetch new thread
-            new_thread = fetch_email_thread(item["email"])
-            
-            if new_thread and new_thread != "No emails found for this lead.":
-                # Update Monday.com
-                if update_item_thread(item["id"], new_thread):
-                    updated_count += 1
-            else:
-                print(f"⚠️  No new thread data for {item['email']}")
-                
+            last_dt = datetime.fromisoformat(last_str.replace("Z", "+00:00"))
+        except Exception:
+            # if missing or unparseable, treat as stale
+            last_dt = cutoff - timedelta(days=1)
+
+        # skip if updated within 2 days
+        if last_dt > cutoff:
+            continue
+
+        if not email:
+            print(f"⚠️  Skipping item {it['id']} (no email)")
+            continue
+
+        stored_thread = cvs.get(THREAD_COL, "")
+        print(f"🔄 Checking {email} (item {it['id']}), last update {last_dt.date()}")
+
+        # fetch new thread
+        try:
+            new_thread = fetch_email_thread(email) or ""
         except Exception as e:
-            print(f"❌ Error processing {item['email']}: {e}")
-    
-    print(f"✅ Sync complete! Updated {updated_count} items")
+            print(f"❌ Error fetching thread for {email}:", e)
+            continue
+
+        # if unchanged, skip
+        if new_thread.strip() == stored_thread.strip():
+            print("   ↳ no changes")
+            continue
+
+        # otherwise update both thread and date
+        updated_cols = {
+            THREAD_COL: {"text": new_thread},
+            LAST_COL:   {"date": datetime.utcnow().date().isoformat()}
+        }
+        vars = {
+            "boardId": BOARD_ID,
+            "itemId":  int(it["id"]),
+            "cols":    json.dumps(updated_cols)
+        }
+
+        up = requests.post(
+            "https://api.monday.com/v2",
+            headers=HEADERS,
+            json={"query": UPDATE_MUTATION, "variables": vars}
+        )
+        up.raise_for_status()
+        result = up.json()
+        if result.get("errors"):
+            print("❌ GraphQL error updating:", result["errors"])
+        else:
+            print(f"✅ Updated item {it['id']}")
 
 if __name__ == "__main__":
-    main()
+    sync_threads()
