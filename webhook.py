@@ -10,10 +10,11 @@ from test import fetch_email_thread
 app = Flask(__name__)
 
 # ─── CONFIG FROM ENV ────────────────────────────────────────────────────────────
-M_TOKEN      = os.getenv("MONDAY_API_TOKEN")
-BOARD_ID     = os.getenv("MONDAY_BOARD_ID")         # e.g. "2032211365"
-EMAIL_COL    = os.getenv("MONDAY_EMAIL_COL")        # e.g. "name"
-LAST_COL     = os.getenv("MONDAY_LAST_CONTACT")     # e.g. "date_mksfxnwb"
+M_TOKEN    = os.getenv("MONDAY_API_TOKEN")
+BOARD_ID   = int(os.getenv("MONDAY_BOARD_ID"))   # cast to int
+EMAIL_COL  = "email_type_mkmpw2vk"               # ← statically set to your real column ID
+LAST_COL   = os.getenv("MONDAY_LAST_CONTACT")
+THREAD_COL = os.getenv("MONDAY_THREAD_COL", "long_text_mkspw74e")
 
 HEADERS = {
     "Authorization": M_TOKEN,
