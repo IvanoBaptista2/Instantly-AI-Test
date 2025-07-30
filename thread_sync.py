@@ -107,4 +107,25 @@ def sync_threads():
         # ── prepare update payload ────────────────────────────────────────────
         updated_cols = {
             THREAD_COL: {"text": new_thread},
-            LAST
+            LAST_COL:   {"date": datetime.utcnow().date().isoformat()}
+        }
+        vars_payload = {
+            "boardId":       BOARD_ID,
+            "itemId":        int(item["id"]),
+            "columnValues":  updated_cols
+        }
+
+        up_resp = requests.post(
+            "https://api.monday.com/v2",
+            headers=HEADERS,
+            json={"query": UPDATE_MUTATION, "variables": vars_payload}
+        )
+        up_resp.raise_for_status()
+        up_data = up_resp.json()
+        if up_data.get("errors"):
+            print(f"❌ GraphQL errors updating item {item['id']}:", up_data["errors"])
+        else:
+            print(f"✅ Updated item {item['id']}")
+
+if __name__ == "__main__":
+    sync_threads()
