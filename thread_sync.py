@@ -1,30 +1,24 @@
 # thread_sync.py
-import os
-import json
-import time
-import requests
+
+import os, json, requests
 from datetime import datetime, timedelta
 from test import fetch_email_thread
 
-# ─── CONFIG ──────────────────────────────────────────────────────────────────
+# ─── CONFIG ─────────────────────────────────────────────────────────────────────
 M_TOKEN  = os.getenv("MONDAY_API_TOKEN")
-BOARD_ID = os.getenv("MONDAY_BOARD_ID")
+BOARD_ID = int(os.getenv("MONDAY_BOARD_ID", "0"))  # cast to int!
 HEADERS  = {
     "Authorization": M_TOKEN,
-    "Content-Type": "application/json",
+    "Content-Type":  "application/json",
 }
 
-# ─── GRAPHQL TEMPLATES ───────────────────────────────────────────────────────
+# ─── GRAPHQL TEMPLATES ──────────────────────────────────────────────────────────
 GET_ITEMS = """
-query ($boardId: ID!) {
+query GetStaleItems($boardId: Int!) {
   boards(ids: [$boardId]) {
     items {
       id
-      column_values(ids: [
-        "lead_email",          # must exist on your board
-        "long_text_mkspw74e",  # your thread column
-        "date"                 # your last‐synced date column
-      ]) {
+      column_values(ids: ["long_text_mkspw74e","date"]) {
         id
         text
       }
@@ -34,7 +28,7 @@ query ($boardId: ID!) {
 """
 
 UPDATE_MUTATION = """
-mutation ($boardId: ID!, $itemId: Int!, $cols: JSON!) {
+mutation UpdateThread($boardId: Int!, $itemId: Int!, $cols: JSON!) {
   change_multiple_column_values(
     board_id: $boardId,
     item_id: $itemId,
@@ -47,88 +41,59 @@ mutation ($boardId: ID!, $itemId: Int!, $cols: JSON!) {
 
 def sync_threads():
     print(f"\n🔄 sync_threads started at {datetime.utcnow().isoformat()}Z")
-    # 1) fetch all items
+
+    # 1) Fetch all items
     resp = requests.post(
         "https://api.monday.com/v2",
         headers=HEADERS,
-        json={"query": GET_ITEMS, "variables": {"boardId": BOARD_ID}}
+        json={
+            "query":     GET_ITEMS,
+            "variables": {"boardId": BOARD_ID}
+        }
     )
-
-    # 2) parse JSON, bail out if malformed or error
-    try:
-        data = resp.json()
-    except ValueError:
-        print("❌ Failed to parse JSON from Monday:", resp.text)
+    data = resp.json()
+    if errors := data.get("errors"):
+        print("❌ GraphQL errors fetching items:", errors)
         return
 
-    if "errors" in data:
-        print("❌ GraphQL errors fetching items:", data["errors"])
-        return
-
-    boards = data.get("data", {}).get("boards")
-    if not boards:
-        print("❌ No boards returned:", data)
-        return
-
-    items = boards[0].get("items", [])
+    items = data["data"]["boards"][0]["items"]
     cutoff = datetime.utcnow() - timedelta(days=2)
 
     for it in items:
-        cvs = { cv["id"]: cv.get("text", "") for cv in it["column_values"] }
-        item_id   = it["id"]
-        last_date = cvs.get("date", "").strip()
-        email     = cvs.get("lead_email", "").strip()
-        stored    = cvs.get("long_text_mkspw74e", "")
-
-        # skip if missing date or email
-        if not last_date or not email:
-            print(f"⚠️  Skipping item {item_id}: missing date or email")
-            continue
-
-        # skip if last_date is less than cutoff
+        cvs = { cv["id"]: cv["text"] or "" for cv in it["column_values"] }
         try:
-            last = datetime.fromisoformat(last_date)
-        except Exception as e:
-            print(f"⚠️  Item {item_id} has bad date `{last_date}`:", e)
-            continue
+            last = datetime.fromisoformat(cvs["date"])
+        except Exception:
+            # if parsing fails, treat as stale
+            last = cutoff - timedelta(days=1)
+
         if last > cutoff:
-            print(f"✅  Item {item_id} synced {last_date}, still fresh")
-            continue
+            continue  # fresh enough
 
-        # 3) fetch new thread and compare
-        print(f"✨  Fetching thread for {email} (item {item_id}) …")
-        new_thread = fetch_email_thread(email).strip()
-        if new_thread == stored.strip():
-            print(f"✅  No changes for item {item_id}")
-            continue
+        stored_thread = cvs["long_text_mkspw74e"]
+        # TODO: you need the lead_email somewhere on the item too,
+        # so that you can call fetch_email_thread(email) here.
+        new_thread = fetch_email_thread(/* lead_email for this item */)
 
-        # 4) update board
+        if new_thread.strip() == stored_thread.strip():
+            continue  # no change
+
         updated_cols = {
-            "long_text_mkspw74e": { "text": new_thread },
-            "date":               { "date": datetime.utcnow().date().isoformat() }
+            "long_text_mkspw74e": {"text": new_thread},
+            "date":               {"date": datetime.utcnow().date().isoformat()}
         }
-        vars_ = {
+        vars = {
             "boardId": BOARD_ID,
-            "itemId":  int(item_id),
+            "itemId":  int(it["id"]),
             "cols":    json.dumps(updated_cols)
         }
         up = requests.post(
             "https://api.monday.com/v2",
             headers=HEADERS,
-            json={"query": UPDATE_MUTATION, "variables": vars_}
+            json={"query": UPDATE_MUTATION, "variables": vars}
         )
-
-        if not up.ok:
-            print(f"❌ Failed to update item {item_id}:", up.status_code, up.text)
-        else:
-            print(f"🔄 Updated item {item_id}")
+        up.raise_for_status()
+        print(f"🔄 Updated item {it['id']}")
 
 if __name__ == "__main__":
-    # run once immediately, then every hour
-    while True:
-        try:
-            sync_threads()
-        except Exception as e:
-            print("❌ sync_threads unhandled exception:", e)
-        # sleep 1h (3600s)
-        time.sleep(3600)
+    sync_threads()
