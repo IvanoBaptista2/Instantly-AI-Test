@@ -20,7 +20,7 @@ HEADERS = {
 # ─── GRAPHQL QUERIES ────────────────────────────────────────────────────────────
 GET_ITEMS = '''
 query GetStaleItems($boardId: ID!) {
-  board(id: $boardId) {
+  boards(ids: [$boardId]) {
     items {
       id
       column_values(ids: ["%s","%s","%s"]) {
@@ -59,7 +59,7 @@ def sync_threads():
         print("❌ GraphQL errors fetching items:", data["errors"])
         return
 
-    items = data["data"]["board"]["items"]
+    items = data["data"]["boards"][0]["items"]
     cutoff = datetime.utcnow() - timedelta(days=2)
 
     for it in items:
