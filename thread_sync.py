@@ -7,10 +7,11 @@ from test import fetch_email_thread
 
 # ─── CONFIG FROM ENV ────────────────────────────────────────────────────────────
 M_TOKEN    = os.getenv("MONDAY_API_TOKEN")
-BOARD_ID   = int(os.getenv("MONDAY_BOARD_ID"))   # cast to int
-EMAIL_COL  = os.getenv("MONDAY_EMAIL_COL")       # e.g. "lead_email"
-LAST_COL   = os.getenv("MONDAY_LAST_CONTACT")    # e.g. "date_mkspx1234"
-THREAD_COL = os.getenv("MONDAY_THREAD_COL", "long_text_mkspw74e")
+BOARD_ID   = os.getenv("MONDAY_BOARD_ID")       # keep as string for ID! type
+EMAIL_COL  = os.getenv("MONDAY_EMAIL_COL")      # e.g. "lead_email"
+LAST_COL   = os.getenv("MONDAY_LAST_CONTACT")   # e.g. "date_mkspx1234"
+THREAD_COL = os.getenv("MONDAY_THREAD_COL",     # fallback if unset
+                       "long_text_mkspw74e")
 
 HEADERS = {
     "Authorization": M_TOKEN,
@@ -18,15 +19,19 @@ HEADERS = {
 }
 
 # ─── GRAPHQL QUERIES ────────────────────────────────────────────────────────────
+# Note: use items_page(limit:…) instead of the removed `items` field,
+#       and declare $boardId as ID! so it matches boards(ids: [ID!])
 GET_ITEMS = '''
-query GetStaleItems($boardId: Int!) {
+query GetStaleItems($boardId: ID!) {
   boards(ids: [$boardId]) {
-    items {
-      id
-      column_values(ids: ["%s","%s","%s"]) {
+    items_page(limit: 500) {
+      items {
         id
-        value
-        text
+        column_values(ids: ["%s","%s","%s"]) {
+          id
+          value
+          text
+        }
       }
     }
   }
@@ -34,7 +39,7 @@ query GetStaleItems($boardId: Int!) {
 ''' % (EMAIL_COL, THREAD_COL, LAST_COL)
 
 UPDATE_MUTATION = '''
-mutation UpdateThread($boardId: Int!, $itemId: Int!, $columnValues: JSON!) {
+mutation UpdateThread($boardId: ID!, $itemId: Int!, $columnValues: JSON!) {
   change_multiple_column_values(
     board_id: $boardId,
     item_id: $itemId,
@@ -53,7 +58,10 @@ def sync_threads():
     resp = requests.post(
         "https://api.monday.com/v2",
         headers=HEADERS,
-        json={"query": GET_ITEMS, "variables": {"boardId": BOARD_ID}}
+        json={
+            "query":     GET_ITEMS,
+            "variables": {"boardId": BOARD_ID}
+        }
     )
     try:
         resp.raise_for_status()
@@ -66,7 +74,9 @@ def sync_threads():
         print("❌ GraphQL errors fetching items:", data["errors"])
         return
 
-    items = data["data"]["boards"][0]["items"]
+    # grab the paginated items
+    board = data["data"]["boards"][0]
+    items = board["items_page"]["items"]
     cutoff = now - timedelta(days=2)
 
     for item in items:
@@ -89,7 +99,7 @@ def sync_threads():
         except ValueError:
             last_dt = cutoff - timedelta(days=1)
 
-        # skip if recently updated
+        # skip if too recent
         if last_dt > cutoff:
             continue
 
@@ -124,7 +134,10 @@ def sync_threads():
         up_resp = requests.post(
             "https://api.monday.com/v2",
             headers=HEADERS,
-            json={"query": UPDATE_MUTATION, "variables": vars_payload}
+            json={
+                "query":     UPDATE_MUTATION,
+                "variables": vars_payload
+            }
         )
         try:
             up_resp.raise_for_status()
