@@ -1,5 +1,5 @@
 # webhook.py
-
+#!/usr/bin/env python3
 import os
 import requests
 import json
@@ -26,128 +26,121 @@ def instantly_webhook():
     payload = request.get_json(force=True)
     print("📥 Incoming request payload:", payload)
 
+    # Handle campaign_completed events
     if payload.get("event_type") == "campaign_completed":
-        campaign_id = payload.get("campaign_id")
+        campaign_id   = payload.get("campaign_id")
         campaign_name = payload.get("campaign_name")
-        date_str = payload.get("timestamp", "").split("T")[0]
+        date_str      = payload.get("timestamp", "").split("T")[0]
         print(f"🚀 Handling campaign_completed: id={campaign_id}, name={campaign_name}, date={date_str}")
-        # Prepare column values for the new item (customize as needed)
-        column_values = {
-            LAST_COL: date_str
-        }
-        create_item_mutation = """
+
+        column_values = { LAST_COL: date_str }
+        mutation = '''
         mutation ($boardId: ID!, $groupId: String!, $itemName: String!, $columnVals: JSON!) {
           create_item (
             board_id: $boardId,
             group_id: $groupId,
             item_name: $itemName,
             column_values: $columnVals
-          ) {
-            id
-          }
+          ) { id }
         }
-        """
-        create_vars = {
-            "boardId": str(BOARD_ID),
-            "groupId": "your_group_id_here",  # <--- put the group id here
-            "itemName": campaign_name or campaign_id or "Campaign Completed",
+        '''
+        vars = {
+            "boardId":    str(BOARD_ID),
+            "groupId":    os.getenv("MONDAY_CAMPAIGN_GROUP", "") ,  # configure your group
+            "itemName":   campaign_name or campaign_id or "Campaign Completed",
             "columnVals": json.dumps(column_values)
         }
-        create_resp = requests.post(
+        resp = requests.post(
             "https://api.monday.com/v2",
-            json={"query": create_item_mutation, "variables": create_vars},
+            json={"query": mutation, "variables": vars},
             headers=HEADERS
         )
-        if not create_resp.ok:
-            print("❌ Monday create_item failed:", create_resp.status_code, create_resp.text)
-            print("🔍 Create item variables:", create_vars)
-            create_resp.raise_for_status()
-        create_data = create_resp.json()
-        print("✅ Monday create_item response:", create_data)
-        if "errors" in create_data:
-            print("❌ GraphQL create_item errors:", create_data["errors"])
-            return jsonify(status="create-error", errors=create_data["errors"]), 500
-        new_item_id = create_data["data"]["create_item"]["id"]
-        print(f"✅ Created new campaign item: {new_item_id}")
-        return jsonify(status="created-campaign", item=new_item_id, campaign_id=campaign_id, campaign_name=campaign_name, date=date_str), 201
+        if not resp.ok:
+            print("❌ Monday create_item failed:", resp.status_code, resp.text)
+            resp.raise_for_status()
+        data = resp.json()
+        if data.get("errors"):  # GraphQL errors
+            print("❌ GraphQL errors:", data["errors"])
+            return jsonify(status="create-error", errors=data["errors"]), 500
 
+        new_id = data["data"]["create_item"]["id"]
+        print(f"✅ Created campaign item {new_id}")
+        return jsonify(status="created-campaign", item=new_id,
+                       campaign_id=campaign_id, campaign_name=campaign_name,
+                       date=date_str), 201
+
+    # Only proceed for email_sent events
     if payload.get("event_type") != "email_sent":
         return jsonify(status="ignored"), 200
 
-    lead_email = payload.get("lead_email")
-    email_account = payload.get("email_account")
-    date_str = payload.get("timestamp", "").split("T")[0]
+    lead_email   = payload.get("lead_email")
+    email_account= payload.get("email_account")
+    timestamp    = payload.get("timestamp", "")
+    date_part, time_part = "", ""
+    if timestamp:
+        try:
+            dt = datetime.fromisoformat(timestamp.replace("Z","+00:00"))
+            date_part = dt.strftime("%Y-%m-%d")
+            time_part = dt.strftime("%H:%M:%S")
+        except Exception as e:
+            print("Timestamp parse error:", e)
 
-    if lead_email and email_account and date_str:
-        timestamp = payload.get("timestamp", "")
-        date_part = ""
-        time_part = ""
-        if timestamp:
-            try:
-                dt = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
-                date_part = dt.strftime("%Y-%m-%d")
-                time_part = dt.strftime("%H:%M:%S")
-            except Exception as e:
-                print("Timestamp parsing error:", e)
+    if lead_email and email_account and date_part:
+        # fetch conversation
+        thread = fetch_email_thread(lead_email)
 
-        # Fetch the email thread from Instantly
-        email_thread = fetch_email_thread(lead_email)
-
-        # Just create new items, no checking for existing ones
         column_values = {
-            "lead_email": {"email": payload["lead_email"], "text": payload["lead_email"]},
-            "tekst__1": payload.get("firstName"),
-            "tekst6__1": payload.get("lastName"),
+            EMAIL_COL:       {"email": lead_email, "text": lead_email},
+            "tekst__1":     payload.get("firstName"),
+            "tekst6__1":    payload.get("lastName"),
             "lead_company": payload.get("companyName"),
-            "title__1": payload.get("jobTitle"),
-            "tekst_1__1": payload.get("linkedIn"),
-            "date": {"date": date_part, "time": time_part},
+            "title__1":     payload.get("jobTitle"),
+            "tekst_1__1":   payload.get("linkedIn"),
+            "date":         {"date": date_part, "time": time_part},
             "email_type_mkmpw2vk": payload.get("email_account"),
-            "email_status_mkmp5hf8": payload.get("event_type"),
-            "long_text_mkspw74e": {"text": email_thread}
+            "email_status_mkmp5hf8":payload.get("event_type"),
+            "long_text_mkspw74e":    {"text": thread}
         }
-        print("About to post to Monday.com:", json.dumps(column_values, indent=2))
-        create_item_mutation = """
+        print("Posting to Monday:", json.dumps(column_values, indent=2))
+
+        mutation = '''
         mutation ($boardId: ID!, $groupId: String!, $itemName: String!, $columnVals: JSON!) {
-          create_item (
+          create_item(
             board_id: $boardId,
             group_id: $groupId,
             item_name: $itemName,
             column_values: $columnVals
-          ) {
-            id
-          }
+          ) { id }
         }
-        """
-        create_vars = {
-            "boardId": str(BOARD_ID),
-            "groupId": "group_mknz7nc",  # <--- put the group id here
-            "itemName": f"{payload.get('firstName', '')} {payload.get('lastName', '')}".strip() or lead_email,
+        '''
+        vars = {
+            "boardId":    str(BOARD_ID),
+            "groupId":    os.getenv("MONDAY_EMAIL_GROUP", ""),
+            "itemName":   f"{payload.get('firstName','')} {payload.get('lastName','')}.strip()" or lead_email,
             "columnVals": json.dumps(column_values)
         }
-        print("GraphQL variables:", json.dumps(create_vars, indent=2))
-        create_resp = requests.post(
+        resp = requests.post(
             "https://api.monday.com/v2",
-            json={"query": create_item_mutation, "variables": create_vars},
+            json={"query": mutation, "variables": vars},
             headers=HEADERS
         )
-        if not create_resp.ok:
-            print("❌ Monday create_item failed:", create_resp.status_code, create_resp.text)
-            print("🔍 Create item variables:", create_vars)
-            create_resp.raise_for_status()
-        create_data = create_resp.json()
-        print("✅ Monday create_item response:", create_data)
-        if "errors" in create_data:
-            print("❌ GraphQL create_item errors:", create_data["errors"])
-            return jsonify(status="create-error", errors=create_data["errors"]), 500
-        new_item_id = create_data["data"]["create_item"]["id"]
-        print(f"✅ Created new item: {new_item_id}")
-        return jsonify(status="created", item=new_item_id, email=lead_email, date=date_str), 201
+        if not resp.ok:
+            print("❌ create_item failed:", resp.status_code, resp.text)
+            resp.raise_for_status()
+        data = resp.json()
+        if data.get("errors"):
+            print("❌ GraphQL errors:", data["errors"])
+            return jsonify(status="create-error", errors=data["errors"]), 500
 
-    return jsonify(status="created"), 201
+        new_id = data["data"]["create_item"]["id"]
+        print(f"✅ Created email_sent item {new_id}")
+        return jsonify(status="created", item=new_id, email=lead_email,
+                       date=date_part), 201
 
-# ─── RUN ───────────────────────────────────────────────────────────────────────
+    return jsonify(status="no-action"), 200
+
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "5001"))
-    print(f"🚀 Listening on http://0.0.0.0:{port}/webhook")
+    print(f"🚀 Serving on 0.0.0.0:{port}")
     app.run(host="0.0.0.0", port=port)
+
