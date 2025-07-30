@@ -10,7 +10,7 @@ M_TOKEN    = os.getenv("MONDAY_API_TOKEN")
 BOARD_ID   = os.getenv("MONDAY_BOARD_ID")    # keep as string so it maps to GraphQL ID!
 EMAIL_COL  = os.getenv("MONDAY_EMAIL_COL")   # e.g. "lead_email"
 LAST_COL   = os.getenv("MONDAY_LAST_CONTACT")# e.g. "date_mkspx1234"
-THREAD_COL = "long_text_mkspw74e"            # hard‑coded column id for your thread
+THREAD_COL = os.getenv("MONDAY_THREAD_COL", "long_text_mkspw74e")  # fallback if env var unset
 
 HEADERS = {
     "Authorization": M_TOKEN,
@@ -48,12 +48,18 @@ mutation UpdateThread($boardId: ID!, $itemId: Int!, $cols: JSON!) {
 def sync_threads():
     print(f"\n🔄 sync_threads started at {datetime.utcnow().isoformat()}Z")
 
-    # 1) fetch all items
+    # 1) fetch all items (only required columns)
     resp = requests.post(
         "https://api.monday.com/v2",
         headers=HEADERS,
         json={"query": GET_ITEMS, "variables": {"boardId": BOARD_ID}}
     )
+    try:
+        resp.raise_for_status()
+    except requests.HTTPError as e:
+        print("❌ HTTP error fetching items:", e, resp.text)
+        return
+
     data = resp.json()
     if data.get("errors"):
         print("❌ GraphQL errors fetching items:", data["errors"])
@@ -62,68 +68,73 @@ def sync_threads():
     items = data["data"]["boards"][0]["items"]
     cutoff = datetime.utcnow() - timedelta(days=2)
 
-    for it in items:
-        # map column_id → (value,text)
-        cvs = { cv["id"]: {"value": cv["value"], "text": cv["text"] or ""} for cv in it["column_values"] }
+    for item in items:
+        cvs = {cv["id"]: cv for cv in item["column_values"]}
+        # extract email
         email = ""
-        # extract email from JSON value if possible
-        if cvs.get(EMAIL_COL, {}).get("value"):
+        raw = cvs.get(EMAIL_COL, {})
+        if raw.get("value"):
             try:
-                email = json.loads(cvs[EMAIL_COL]["value"]).get("email","")
+                email = json.loads(raw["value"]).get("email", "")
             except:
-                email = cvs[EMAIL_COL]["text"]
+                email = raw.get("text", "")
         else:
-            email = cvs[EMAIL_COL]["text"]
+            email = raw.get("text", "")
 
-        last_str = cvs.get(LAST_COL,{}).get("text","") or ""
+        # extract last contact date
+        last_raw = cvs.get(LAST_COL, {}).get("text", "")
         try:
-            last_dt = datetime.fromisoformat(last_str.replace("Z","+00:00"))
+            last_dt = datetime.fromisoformat(last_raw.replace("Z", "+00:00"))
         except:
-            # treat missing/unparseable as stale
             last_dt = cutoff - timedelta(days=1)
 
-        # skip if within 2 days
+        # skip recent
         if last_dt > cutoff:
             continue
 
         if not email:
-            print(f"⚠️  item {it['id']} has no email, skipping")
+            print(f"⚠️  item {item['id']} missing email, skipping")
             continue
 
-        stored = cvs.get(THREAD_COL,{}).get("text","")
-        print(f"🔄 refetching {email} (item {it['id']}), last update {last_dt.date()}")
+        stored = cvs.get(THREAD_COL, {}).get("text", "")
+        print(f"🔄 refetching thread for {email} (item {item['id']}), last update {last_dt.date()}")
 
         try:
             new_thread = fetch_email_thread(email) or ""
         except Exception as e:
-            print(f"❌ failed to fetch thread for {email}:", e)
+            print(f"❌ failed to fetch thread for {email}: {e}")
             continue
 
         if new_thread.strip() == stored.strip():
-            print("   ↳ no changes")
+            print("   ↳ no changes detected")
             continue
 
-        # update both thread + date
+        # prepare update
         updated_cols = {
             THREAD_COL: {"text": new_thread},
             LAST_COL:   {"date": datetime.utcnow().date().isoformat()}
         }
-        vars = {
+        vars_payload = {
             "boardId": BOARD_ID,
-            "itemId":  int(it["id"]),
+            "itemId":  int(item["id"]),
             "cols":    json.dumps(updated_cols)
         }
-        up = requests.post(
+        up_resp = requests.post(
             "https://api.monday.com/v2",
             headers=HEADERS,
-            json={"query": UPDATE_MUTATION, "variables": vars}
+            json={"query": UPDATE_MUTATION, "variables": vars_payload}
         )
-        up.raise_for_status()
-        result = up.json()
-        if result.get("errors"):
-            print("❌ GraphQL error updating:", result["errors"])
+        try:
+            up_resp.raise_for_status()
+        except requests.HTTPError as e:
+            print(f"❌ HTTP error updating item {item['id']}: {e}", up_resp.text)
+            continue
+
+        up_data = up_resp.json()
+        if up_data.get("errors"):
+            print(f"❌ GraphQL errors updating item {item['id']}:", up_data["errors"])
         else:
-            print(f"✅ Updated item {it['id']}")
+            print(f"✅ Updated item {item['id']}")
 
 if __name__ == "__main__":
     sync_threads()
