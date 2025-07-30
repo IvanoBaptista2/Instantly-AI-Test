@@ -2,7 +2,7 @@
 import os
 import json
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from test import fetch_email_thread
 
 # ─── CONFIG FROM ENV ────────────────────────────────────────────────────────────
@@ -19,7 +19,7 @@ HEADERS = {
 
 # ─── GRAPHQL QUERIES ────────────────────────────────────────────────────────────
 GET_ITEMS = '''
-query GetStaleItems($boardId: ID!) {
+query GetStaleItems($boardId: Int!) {
   boards(ids: [$boardId]) {
     items {
       id
@@ -46,7 +46,8 @@ mutation UpdateThread($boardId: Int!, $itemId: Int!, $columnValues: JSON!) {
 '''
 
 def sync_threads():
-    print(f"\n🔄 sync_threads started at {datetime.utcnow().isoformat()}Z")
+    now = datetime.now(timezone.utc)
+    print(f"\n🔄 sync_threads started at {now.isoformat()}")
 
     # 1) fetch all items (only required columns)
     resp = requests.post(
@@ -54,14 +55,19 @@ def sync_threads():
         headers=HEADERS,
         json={"query": GET_ITEMS, "variables": {"boardId": BOARD_ID}}
     )
-    resp.raise_for_status()
+    try:
+        resp.raise_for_status()
+    except requests.HTTPError as e:
+        print("❌ HTTP error fetching items:", e, resp.text)
+        return
+
     data = resp.json()
     if data.get("errors"):
         print("❌ GraphQL errors fetching items:", data["errors"])
         return
 
     items = data["data"]["boards"][0]["items"]
-    cutoff = datetime.utcnow() - timedelta(days=2)
+    cutoff = now - timedelta(days=2)
 
     for item in items:
         cvs = {cv["id"]: cv for cv in item["column_values"]}
@@ -107,12 +113,12 @@ def sync_threads():
         # ── prepare update payload ────────────────────────────────────────────
         updated_cols = {
             THREAD_COL: {"text": new_thread},
-            LAST_COL:   {"date": datetime.utcnow().date().isoformat()}
+            LAST_COL:   {"date": datetime.now(timezone.utc).date().isoformat()}
         }
         vars_payload = {
-            "boardId":       BOARD_ID,
-            "itemId":        int(item["id"]),
-            "columnValues":  updated_cols
+            "boardId":      BOARD_ID,
+            "itemId":       int(item["id"]),
+            "columnValues": updated_cols
         }
 
         up_resp = requests.post(
@@ -120,7 +126,12 @@ def sync_threads():
             headers=HEADERS,
             json={"query": UPDATE_MUTATION, "variables": vars_payload}
         )
-        up_resp.raise_for_status()
+        try:
+            up_resp.raise_for_status()
+        except requests.HTTPError as e:
+            print(f"❌ HTTP error updating item {item['id']}: {e}", up_resp.text)
+            continue
+
         up_data = up_resp.json()
         if up_data.get("errors"):
             print(f"❌ GraphQL errors updating item {item['id']}:", up_data["errors"])
